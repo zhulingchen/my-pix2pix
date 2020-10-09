@@ -1,0 +1,8 @@
+discriminator_conv_layers: 3
+discriminator_first_conv_filters: 64
+generator_downsamplings: 8
+generator_first_conv_filters: 64
+norm_layer: batch
+use_dropout: true
+init_type: normal
+init_gain: 0.02

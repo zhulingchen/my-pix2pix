@@ -1,19 +1,68 @@
+import yaml
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
+import torchvision.transforms as transforms
 from torch.nn import init
-import functools
 from torch.optim import lr_scheduler
+from torchsummary import summary
 
+from dataset import *
+
+
+
+def get_norm_layer(name):
+    name = name.lower()
+    if name == 'batch':
+        return nn.BatchNorm2d
+    elif name == 'instance':
+        return nn.InstanceNorm2d
+    else:
+        raise NotImplementedError('Normalization layer {:s} is not supported.'.format(name))
+
+
+def init_weights(net, type='normal', gain=0.02):
+    """Initialize network weights
+
+    Parameters:
+        net (network)   -- network to be initialized
+        type (str) -- the name of an initialization method: normal | xavier | kaiming | orthogonal
+        gain (float)    -- scaling factor for normal, xavier and orthogonal.
+
+    Initialization type 'normal' was used in the original pix2pix and CycleGAN paper. But xavier and kaiming might
+    work better for some applications. Feel free to try yourself.
+    """
+    def init_func(m):  # define the initialization function
+        classname = m.__class__.__name__
+        if hasattr(m, 'weight') and (classname.find('Conv') != -1 or classname.find('Linear') != -1):
+            if type == 'normal':
+                init.normal_(m.weight.data, 0.0, gain)
+            elif type == 'xavier':
+                init.xavier_normal_(m.weight.data, gain=gain)
+            elif type == 'kaiming':
+                init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
+            elif type == 'orthogonal':
+                init.orthogonal_(m.weight.data, gain=gain)
+            else:
+                raise NotImplementedError('initialization method [%s] is not implemented' % type)
+            if hasattr(m, 'bias') and m.bias is not None:
+                init.constant_(m.bias.data, 0.0)
+        elif classname.find('BatchNorm2d') != -1:  # BatchNorm Layer's weight is not a matrix; only normal distribution applies.
+            init.normal_(m.weight.data, 1.0, gain)
+            init.constant_(m.bias.data, 0.0)
+
+    print('Initialize network with {:s}'.format(type))
+    net.apply(init_func)  # apply the initialization function <init_func>
 
 
 class UnetSkipConnectionBlock(nn.Module):
     """Defines the Unet submodule with skip connection.
-        X -------------------identity----------------------
+        + -------------------identity--------------------
         |-- downsampling -- |submodule| -- upsampling --|
     """
 
     def __init__(self, n_outer_channels, n_inner_channels, n_input_channels=None,
-                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False):
+                 submodule=None, outermost=False, innermost=False, norm_layer='batch_norm', use_dropout=False):
         """Construct a Unet submodule with skip connections.
 
         Parameters:
@@ -23,11 +72,12 @@ class UnetSkipConnectionBlock(nn.Module):
             submodule (UnetSkipConnectionBlock): previously defined submodules
             outermost (bool): if this module is the outermost module
             innermost (bool): if this module is the innermost module
-            norm_layer (nn.Module): normalization layer
+            norm_layer (str): normalization layer name
             use_dropout (bool): if use dropout layers.
         """
         super(UnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
+        norm_layer = get_norm_layer(norm_layer)
         use_bias = (norm_layer == nn.InstanceNorm2d)
         if n_input_channels is None:
             n_input_channels = n_outer_channels
@@ -40,7 +90,7 @@ class UnetSkipConnectionBlock(nn.Module):
 
         if outermost:
             upconv = nn.ConvTranspose2d(n_inner_channels * 2, n_outer_channels,
-                                        kernel_size=4, stride=2, padding=1)
+                                        kernel_size=4, stride=2, padding=1)  # in_channels is doubled because of the previous concatenation
             down = [downconv]
             up = [uprelu, upconv, nn.Tanh()]
             model = down + [submodule] + up
@@ -52,7 +102,7 @@ class UnetSkipConnectionBlock(nn.Module):
             model = down + up
         else:
             upconv = nn.ConvTranspose2d(n_inner_channels * 2, n_outer_channels,
-                                        kernel_size=4, stride=2, padding=1, bias=use_bias)
+                                        kernel_size=4, stride=2, padding=1, bias=use_bias)  # in_channels is doubled because of the previous concatenation
             down = [downrelu, downconv, downnorm]
             up = [uprelu, upconv, upnorm]
             model = down + [submodule] + up
@@ -68,8 +118,8 @@ class UnetSkipConnectionBlock(nn.Module):
 
 class Pix2pixGenerator(nn.Module):
     """Define a Unet-based generator"""
-    def __init__(self, n_input_channels, n_output_channels,
-                 num_downs, n_first_conv_filters=64, norm_layer=nn.BatchNorm2d, use_dropout=False):
+    def __init__(self, n_input_channels, n_output_channels, num_downs,
+                 n_first_conv_filters=64, norm_layer='batch_norm', use_dropout=False):
         """Construct a U-net generator
         Parameters:
             n_input_channels (int): the number of channels in input images
@@ -77,7 +127,7 @@ class Pix2pixGenerator(nn.Module):
             num_downs (int): the number of downsamplings in UNet.
                              For example, if |num_downs| == 7, image of size 128x128 will become of size 1x1 # at the bottleneck
             n_first_conv_filters (int): the number of filters in the last conv layer
-            norm_layer: normalization layer
+            norm_layer (str): normalization layer name
 
         Construct the U-net from the innermost layer to the outermost layer
         It is a recursive process.
@@ -107,16 +157,17 @@ class Pix2pixGenerator(nn.Module):
 
 class Pix2pixDiscriminator(nn.Module):
     """Define a PatchGAN discriminator"""
-    def __init__(self, n_input_channels, n_first_conv_filters=64, n_layers=3, norm_layer=nn.BatchNorm2d):
+    def __init__(self, n_input_channels, n_first_conv_filters=64, n_layers=3, norm_layer='batch_norm'):
         """Construct a PatchGAN discriminator
 
         Parameters:
             n_input_channels (int): the number of channels in input images
             n_first_conv_filters (int): the number of filters in the last conv layer
             n_layers (int): the number of conv layers in the discriminator
-            norm_layer (nn.Module): normalization layer
+            norm_layer (str): normalization layer name
         """
         super(Pix2pixDiscriminator, self).__init__()
+        norm_layer = get_norm_layer(norm_layer)
         use_bias = (norm_layer == nn.InstanceNorm2d)
         sequence = [nn.Conv2d(n_input_channels, n_first_conv_filters,
                               kernel_size=4, stride=2, padding=1),
@@ -141,5 +192,52 @@ class Pix2pixDiscriminator(nn.Module):
         return self.model(x)
 
 
-class Pix2pixGAN(nn.Module):
-    pass
+class Pix2pixGAN():
+    """Define a Pix2pix GAN"""
+    def __init__(self, args):
+        """Construct a Pix2pix GAN
+
+        Parameters:
+            args (argparse.Namespace): argument list
+        """
+        self.config = args.config
+        self.dataset = args.dataset
+        self.verbose = args.verbose
+
+    def load_config(self):
+        with open(self.config, 'r') as f:
+            self.config = yaml.safe_load(f)
+
+    def load_dataset(self):
+        train_path = 'datasets/{:s}/train'.format(self.dataset)
+        transforms_src = transforms.Compose([transforms.ToTensor(),
+                                             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
+        transforms_tgt = transforms.Compose([transforms.ToTensor(),
+                                             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+        self.train_dataset = Pix2pixDataset(train_path, transforms_src, transforms_tgt)
+        assert all(s[0].shape == s[1].shape for s in self.train_dataset) and (len(set(s[0].shape for s in self.train_dataset)) == 1), \
+            "The shape of all source and target images must be the same."
+        print('Loaded {:d} training samples from {:s}'.format(len(self.train_dataset), train_path))
+
+    def build_discriminator(self):
+        self.discriminator = Pix2pixDiscriminator(self.train_dataset[0][0].shape[0] * 2,
+                                                  n_first_conv_filters=self.config['discriminator_first_conv_filters'],
+                                                  n_layers=self.config['discriminator_conv_layers'],
+                                                  norm_layer=self.config['norm_layer'])
+        # initialize network weights
+        init_weights(self.discriminator, self.config['init_type'], self.config['init_gain'])
+        if self.verbose:
+            print('Pix2pix discriminator architecture')
+            summary(self.discriminator, [s.numpy().shape for s in self.train_dataset[0]], device='cpu')
+
+    def build_generator(self):
+        self.generator = Pix2pixGenerator(self.train_dataset[0][0].shape[0], self.train_dataset[0][1].shape[0],
+                                          num_downs=self.config['generator_downsamplings'],
+                                          n_first_conv_filters=self.config['generator_first_conv_filters'],
+                                          norm_layer=self.config['norm_layer'],
+                                          use_dropout=self.config['use_dropout'])
+        # initialize network weights
+        init_weights(self.generator, self.config['init_type'], self.config['init_gain'])
+        if self.verbose:
+            print('Pix2pix generator architecture')
+            summary(self.generator, self.train_dataset[0][0].numpy().shape, device='cpu')
