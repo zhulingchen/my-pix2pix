@@ -27,7 +27,7 @@ if __name__ == '__main__':
     summary(discriminator, [s.numpy().shape for s in train_dataset[0]], device='cpu')
 
     # build generator
-    generator = Pix2pixGenerator(train_dataset[0][0].shape[0], train_dataset[0][1].shape[0], num_downs=8)
+    generator = Pix2pixGenerator(train_dataset[0][0].shape[0], train_dataset[0][1].shape[0], num_downs=8, use_dropout=True)
     print('Pix2pix generator architecture')
     summary(generator, train_dataset[0][0].numpy().shape, device='cpu')
 
