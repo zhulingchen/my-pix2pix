@@ -17,14 +17,14 @@ class Pix2pixDataset(Dataset):
         self.root_dir = os.path.normpath(root_dir)
         self.transforms_src = transforms_src
         self.transforms_tgt = transforms_tgt
-        images = self.load_images()
+        images = self.__load_images()
         self.length = len(images)
         for image in images:
             _, n_cols, _ = image.shape
             self.images_src.append(image[:, n_cols//2:])
             self.images_tgt.append(image[:, :n_cols//2])
 
-    def load_images(self):
+    def __load_images(self):
         images = []
         for filename in os.listdir(self.root_dir):
             image = cv2.imread(os.path.join(self.root_dir, filename))
