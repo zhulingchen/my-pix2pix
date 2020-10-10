@@ -17,5 +17,6 @@ if __name__ == '__main__':
 
     # build pix2pix model architecture
     model = Pix2pixGAN(args)
-
-    pass
+    if model.is_train:
+        model.train()
+        model.save_networks()

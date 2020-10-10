@@ -12,4 +12,10 @@ norm_layer: batch
 use_dropout: true
 init_type: normal
 init_gain: 0.02
-loss: vanilla
+loss: vanilla  # vanilla, wgangp
+lr: 0.0002
+beta1: 0.5
+beta2: 0.999
+lambda_l1: 100
+batch_size: 1
+epochs: 200

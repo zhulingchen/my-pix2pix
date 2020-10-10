@@ -1,6 +1,9 @@
 import yaml
+import time
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
 from torch.nn import init
@@ -18,7 +21,24 @@ def get_norm_layer(name):
     elif name == 'instance':
         return nn.InstanceNorm2d
     else:
-        raise NotImplementedError('Normalization layer {:s} is not supported.'.format(name))
+        raise NotImplementedError('Normalization layer name {:s} is not supported.'.format(name))
+
+
+def get_gan_loss(name, device):
+    name = name.lower()
+    if name == 'vanilla':
+        def bce_with_logits_and_singleton_target_loss(input, target):
+            assert isinstance(input, torch.Tensor) and isinstance(target, (bool, int, float))
+            target_tensor = torch.tensor(target).expand_as(input).float().to(device)
+            return F.binary_cross_entropy_with_logits(input, target_tensor)
+        return bce_with_logits_and_singleton_target_loss
+    elif name == 'wgangp':
+        def wgangp_loss(input, target):
+            assert isinstance(input, torch.Tensor) and isinstance(target, (bool, int, float))
+            return -input.mean() if bool(target) else input.mean()
+        return wgangp_loss
+    else:
+        raise NotImplementedError('GAN loss name {:s} is not supported.'.format(name))
 
 
 class UnetSkipConnectionBlock(nn.Module):
@@ -166,14 +186,25 @@ class Pix2pixGAN():
         Parameters:
             args (argparse.Namespace): argument list
         """
+        self.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
         self.config = args.config
         self.dataset = args.dataset
         self.verbose = args.verbose
         self.is_train = (args.mode == 'train')
         self.__load_config()
         self.__load_dataset()
-        self.__build_discriminator()
         self.__build_generator()
+        if self.is_train:
+            self.__build_discriminator()
+            self.gan_loss = get_gan_loss(self.config['loss'], self.device)
+            self.l1_loss = nn.L1Loss()
+            self.opt_g = torch.optim.Adam(self.generator.parameters(),
+                                          lr=self.config['lr'],
+                                          betas=(self.config['beta1'], self.config['beta2']))
+            self.opt_d = torch.optim.Adam(self.discriminator.parameters(),
+                                          lr=self.config['lr'],
+                                          betas=(self.config['beta1'], self.config['beta2']))
+
 
     def __init_weights(self, net, type='normal', gain=0.02):
         """Initialize network weights
@@ -217,28 +248,18 @@ class Pix2pixGAN():
         transforms_src = transforms.Compose([transforms.ToPILImage(),
                                              transforms.Resize((self.config['image_src_rows'], self.config['image_src_cols'])),
                                              transforms.ToTensor(),
-                                             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])])
+                                             transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
         transforms_tgt = transforms.Compose([transforms.ToPILImage(),
                                              transforms.Resize((self.config['image_src_rows'], self.config['image_src_cols'])),
                                              transforms.ToTensor(),
-                                             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-        self.dataset = Pix2pixDataset(dataset_path, transforms_src, transforms_tgt)
-        assert all(s[0].shape == s[1].shape for s in self.dataset) and (len(set(s[0].shape for s in self.dataset)) == 1), \
+                                             transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+        dataset = Pix2pixDataset(dataset_path, transforms_src, transforms_tgt)
+        assert all(s[0].shape == s[1].shape for s in dataset) and (len(set(s[0].shape for s in dataset)) == 1), \
             "The shape of all source and target images must be the same."
-        print('Loaded {:d} training samples from {:s}'.format(len(self.dataset), dataset_path))
-
-    def __build_discriminator(self):
-        self.discriminator = Pix2pixDiscriminator(n_input_channels=self.config['image_src_chns'] + self.config['image_tgt_chns'],
-                                                  n_first_conv_filters=self.config['discriminator_first_conv_filters'],
-                                                  n_layers=self.config['discriminator_conv_layers'],
-                                                  norm_layer=self.config['norm_layer'])
-        # initialize network weights
-        print('Initialize discriminator network with {:s}'.format(self.config['init_type']))
-        self.__init_weights(self.discriminator, self.config['init_type'], self.config['init_gain'])
-        if self.verbose:
-            print('Pix2pix discriminator architecture')
-            summary(self.discriminator, [(self.config['image_src_chns'], self.config['image_src_rows'], self.config['image_src_cols']),
-                                         (self.config['image_tgt_chns'], self.config['image_tgt_rows'], self.config['image_tgt_cols'])], device='cpu')
+        self.dataloader = DataLoader(dataset, batch_size=self.config['batch_size'], shuffle=True, num_workers=0)
+        print('Loaded {:d} training samples from {:s} '\
+              '(batch size: {:d}, number of batches: {:d})'.format(len(dataset), dataset_path,
+                                                                   self.config['batch_size'], len(self.dataloader)))
 
     def __build_generator(self):
         self.generator = Pix2pixGenerator(n_input_channels=self.config['image_src_chns'],
@@ -253,3 +274,52 @@ class Pix2pixGAN():
         if self.verbose:
             print('Pix2pix generator architecture')
             summary(self.generator, (self.config['image_src_chns'], self.config['image_src_rows'], self.config['image_src_cols']), device='cpu')
+        self.generator = self.generator.to(self.device)
+
+    def __build_discriminator(self):
+        self.discriminator = Pix2pixDiscriminator(n_input_channels=self.config['image_src_chns'] + self.config['image_tgt_chns'],
+                                                  n_first_conv_filters=self.config['discriminator_first_conv_filters'],
+                                                  n_layers=self.config['discriminator_conv_layers'],
+                                                  norm_layer=self.config['norm_layer'])
+        # initialize network weights
+        print('Initialize discriminator network with {:s}'.format(self.config['init_type']))
+        self.__init_weights(self.discriminator, self.config['init_type'], self.config['init_gain'])
+        if self.verbose:
+            print('Pix2pix discriminator architecture')
+            summary(self.discriminator, [(self.config['image_src_chns'], self.config['image_src_rows'], self.config['image_src_cols']),
+                                         (self.config['image_tgt_chns'], self.config['image_tgt_rows'], self.config['image_tgt_cols'])], device='cpu')
+        self.discriminator = self.discriminator.to(self.device)
+
+    def train(self):
+        for epoch in range(self.config['epochs']):
+            epoch_start_time = time.time()
+            for batch, (real_src, real_tgt, _) in enumerate(self.dataloader):
+                real_src = real_src.to(self.device)
+                real_tgt = real_tgt.to(self.device)
+                # generate fake target
+                fake_tgt = self.generator(real_src)
+                # update discriminator
+                for param in self.discriminator.parameters():  # enable backprop for discriminator
+                    param.requires_grad = True
+                self.opt_d.zero_grad()  # clear discriminator gradients
+                pred_fake = self.discriminator(real_src, fake_tgt.detach())  # discriminate fake; stop backprop to the generator
+                loss_d_fake = self.gan_loss(pred_fake, False)  # discriminator loss on fake
+                pred_real = self.discriminator(real_src, real_tgt)  # discriminate real
+                loss_d_real = self.gan_loss(pred_real, True)  # discriminator loss on real
+                loss_d = 0.5 * (loss_d_fake + loss_d_real)
+                loss_d.backward()
+                self.opt_d.step()  # update discriminator weights
+                # update generator
+                for param in self.discriminator.parameters():  # disable backprop for discriminator
+                    param.requires_grad = False
+                self.opt_g.zero_grad()  # clear generator gradients
+                pred_fake = self.discriminator(real_src, fake_tgt)  # discriminate fake
+                loss_g_gan = self.gan_loss(pred_fake, True)  # gan loss on fake; let discriminator think fake_tgt is real
+                loss_g_l1 = self.config['lambda_l1'] * F.l1_loss(fake_tgt, real_tgt)  # weighted L1-loss
+                loss_g = loss_g_gan + loss_g_l1
+                loss_g.backward()
+                self.opt_g.step()  # update generator weights
+            print('Epoch {:d} / {:d} \t Elapsed Time: {:.4f} sec'.format(epoch+1, self.config['epochs'], time.time() - epoch_start_time))
+
+    def save_networks(self):
+        pass
