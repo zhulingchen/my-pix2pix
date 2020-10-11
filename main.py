@@ -17,4 +17,3 @@ if __name__ == '__main__':
     model = Pix2pixGAN(args)
     if model.is_train:
         model.train()
-        model.save_networks()
