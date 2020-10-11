@@ -302,7 +302,7 @@ class Pix2pixGAN():
         if self.verbose:
             print('Pix2pix generator architecture')
             summary(self.generator, (self.config['image_chns'], self.config['image_rows'], self.config['image_cols']), device='cpu')
-        self.generator = self.generator.to(self.device)
+        self.generator.to(self.device)
 
     def __build_discriminator(self):
         self.discriminator = Pix2pixDiscriminator(n_input_channels=2 * self.config['image_chns'],
@@ -315,12 +315,13 @@ class Pix2pixGAN():
         if self.verbose:
             print('Pix2pix discriminator architecture')
             summary(self.discriminator, [(self.config['image_chns'], self.config['image_rows'], self.config['image_cols'])] * 2, device='cpu')
-        self.discriminator = self.discriminator.to(self.device)
+        self.discriminator.to(self.device)
 
     def train(self):
         train_start_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         for epoch in range(self.config['epochs']):
             epoch_start_time = time.time()
+            # train each epoch
             for batch, (real_src, real_tgt, _) in enumerate(self.train_dataloader):
                 real_src = real_src.to(self.device)
                 real_tgt = real_tgt.to(self.device)
@@ -347,7 +348,10 @@ class Pix2pixGAN():
                 loss_g = loss_g_gan + loss_g_l1
                 loss_g.backward()
                 self.opt_g.step()  # update generator weights
-            print('Epoch {:d} / {:d} \t Elapsed Time: {:.4f} sec'.format(epoch+1, self.config['epochs'], time.time() - epoch_start_time))
+            print('Epoch {:d} / {:d}: \t Elapsed Time: {:.4f} sec \t' \
+                  'D_loss: {:.4f} \t G_loss: {:.4f}'.format(epoch+1, self.config['epochs'], time.time() - epoch_start_time,
+                                                            loss_d.item(), loss_g.item()))
+            # save validation results
             if ((epoch + 1) % self.config['val_freq'] == 0) and self.use_val:
                 val_output_path = 'datasets/{:s}/val_output/{:s}'.format(self.dataset, train_start_time)
                 if not os.path.exists(val_output_path):
@@ -365,6 +369,14 @@ class Pix2pixGAN():
                 val_output_image = np.concatenate([real_src, fake_tgt, real_tgt], axis=1)
                 val_output_image = Image.fromarray(val_output_image, 'RGB')
                 val_output_image.save(os.path.join(os.path.normpath(val_output_path), real_filename_base + real_filename_ext))
-
-    def save_networks(self):
-        pass
+            # save models
+            if ((epoch + 1) % self.config['save_freq'] == 0) or (epoch == self.config['epochs'] - 1):
+                model_path = 'datasets/{:s}/model/{:s}'.format(self.dataset, train_start_time)
+                if not os.path.exists(model_path):
+                    os.makedirs(model_path)
+                generator_model_filename = 'generator_epoch_{:d}.pth'.format(epoch + 1)
+                discriminator_model_filename = 'discriminator_epoch_{:d}.pth'.format(epoch + 1)
+                torch.save(self.generator.cpu().state_dict(), os.path.join(os.path.normpath(model_path), generator_model_filename))
+                torch.save(self.discriminator.cpu().state_dict(), os.path.join(os.path.normpath(model_path), discriminator_model_filename))
+                self.generator.to(self.device)
+                self.discriminator.to(self.device)
