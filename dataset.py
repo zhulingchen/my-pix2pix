@@ -21,8 +21,8 @@ class Pix2pixDataset(Dataset):
         self.length = len(images)
         for image in images:
             _, n_cols, _ = image.shape
-            self.images_src.append(image[:, n_cols//2:])
-            self.images_tgt.append(image[:, :n_cols//2])
+            self.images_src.append(image[:, n_cols//2:])  # right half
+            self.images_tgt.append(image[:, :n_cols//2])  # left half
 
     def __load_images(self):
         images, images_path = [], []

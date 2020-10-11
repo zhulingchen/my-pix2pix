@@ -1,9 +1,6 @@
-image_src_rows: 256
-image_src_cols: 256
-image_src_chns: 3
-image_tgt_rows: 256
-image_tgt_cols: 256
-image_tgt_chns: 3
+image_rows: 256
+image_cols: 256
+image_chns: 3
 discriminator_conv_layers: 3
 discriminator_first_conv_filters: 64
 generator_downsamplings: 8
@@ -19,3 +16,4 @@ beta2: 0.999
 lambda_l1: 100
 batch_size: 1
 epochs: 200
+val_freq: 1
