@@ -382,7 +382,7 @@ class Pix2pixGAN():
         val_output_image = Image.fromarray(val_output_image, 'RGB')
         val_output_path = os.path.join(os.path.normpath(val_output_dir), real_filename_base + real_filename_ext)
         val_output_image.save(val_output_path)
-        print('Validation is saved at {:s}.'.format(val_output_path))
+        print('Validation is saved to {:s}.'.format(val_output_path))
 
     def save_models(self, tag=None, epoch=None):
         model_dir = 'datasets/{:s}/model/{:s}'.format(self.dataset, tag) if tag is not None \
@@ -399,8 +399,8 @@ class Pix2pixGAN():
         torch.save(self.discriminator.cpu().state_dict(), discriminator_model_path)
         self.generator.to(self.device)
         self.discriminator.to(self.device)
-        print('Generator model is saved at {:s}.'.format(generator_model_path))
-        print('Discriminator model is saved at {:s}'.format(discriminator_model_path))
+        print('Generator model is saved to {:s}.'.format(generator_model_path))
+        print('Discriminator model is saved to {:s}'.format(discriminator_model_path))
 
     def test(self):
         test_output_dir = 'datasets/{:s}/test_output'.format(self.dataset)
@@ -438,6 +438,8 @@ class Pix2pixGAN():
         model_dir = 'datasets/{:s}/model'.format(self.dataset)
         if generator_model_filename is None:
             generator_model_filename = 'generator.pth'
-        assert os.path.isfile(os.path.join(os.path.normpath(model_dir), generator_model_filename)), "Generator model file must exist."
-        state_dict = torch.load(os.path.join(os.path.normpath(model_dir), generator_model_filename), map_location=self.device)
+        generator_model_path = os.path.join(os.path.normpath(model_dir), generator_model_filename)
+        assert os.path.isfile(generator_model_path), "Generator model file must exist."
+        state_dict = torch.load(generator_model_path, map_location=self.device)
         self.generator.load_state_dict(state_dict)
+        print('Loaded generator model {:s}'.format(generator_model_path))
