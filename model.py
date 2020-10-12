@@ -5,12 +5,11 @@ from datetime import datetime
 import warnings
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import DataLoader
-import torchvision.transforms as transforms
 from torch.nn import init
+import torch.nn.functional as F
+from torch.utils.data import DataLoader
 from torch.optim import lr_scheduler
+import torchvision.transforms as transforms
 from torchsummary import summary
 import numpy as np
 from PIL import Image
@@ -200,7 +199,6 @@ class Pix2pixGAN():
         self.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
         self.config = args.config
         self.dataset = args.dataset
-        self.verbose = args.verbose
         self.is_train = (args.mode == 'train')
         self.__load_config()
         self.__build_generator()
@@ -215,6 +213,8 @@ class Pix2pixGAN():
             self.opt_d = torch.optim.Adam(self.discriminator.parameters(),
                                           lr=self.config['lr'],
                                           betas=(self.config['beta1'], self.config['beta2']))
+        else:
+            self.test_images_path = [os.path.normpath(i) for i in args.input]
 
     def __init_weights(self, net, type='normal', gain=0.02):
         """Initialize network weights
@@ -254,39 +254,39 @@ class Pix2pixGAN():
             self.config = yaml.safe_load(f)
 
     def __load_image_transforms(self):
-        self.transforms_src = transforms.Compose([transforms.ToPILImage(),
-                                                  transforms.Resize((self.config['image_rows'], self.config['image_cols'])),
-                                                  transforms.ToTensor(),
-                                                  transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
-        self.transforms_tgt = transforms.Compose([transforms.ToPILImage(),
-                                                  transforms.Resize((self.config['image_rows'], self.config['image_cols'])),
-                                                  transforms.ToTensor(),
-                                                  transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+        transforms_src = transforms.Compose([transforms.ToPILImage(),
+                                             transforms.Resize((self.config['image_rows'], self.config['image_cols'])),
+                                             transforms.ToTensor(),
+                                             transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+        transforms_tgt = transforms.Compose([transforms.ToPILImage(),
+                                             transforms.Resize((self.config['image_rows'], self.config['image_cols'])),
+                                             transforms.ToTensor(),
+                                             transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5))])
+        return transforms_src, transforms_tgt
 
     def __load_dataset(self):
-        train_dataset_path = 'datasets/{:s}/train'.format(self.dataset)
-        val_dataset_path = 'datasets/{:s}/val'.format(self.dataset)
-        if not os.path.exists(train_dataset_path):
-            raise ValueError('Train image directory {:s} does not exist.'.format(train_dataset_path))
-        if not os.path.exists(val_dataset_path):
+        train_dataset_dir = 'datasets/{:s}/train'.format(self.dataset)
+        val_dataset_dir = 'datasets/{:s}/val'.format(self.dataset)
+        if not os.path.exists(train_dataset_dir):
+            raise ValueError('Train image directory {:s} does not exist.'.format(train_dataset_dir))
+        if not os.path.exists(val_dataset_dir):
             self.use_val = False
-            warnings.warn('Validation image directory {:s} does not exist.'.format(val_dataset_path))
-        self.__load_image_transforms()
-        train_dataset = Pix2pixDataset(train_dataset_path, self.transforms_src, self.transforms_tgt)
+            warnings.warn('Validation image directory {:s} does not exist.'.format(val_dataset_dir))
+        train_dataset = Pix2pixDataset(train_dataset_dir, *self.__load_image_transforms())
         assert all(s[0].shape == s[1].shape for s in train_dataset) and (len(set(s[0].shape for s in train_dataset)) == 1), \
             "The shape of all source and target images must be the same."
         self.train_dataloader = DataLoader(train_dataset, batch_size=self.config['batch_size'], shuffle=True, num_workers=0)
         print('Loaded {:d} training samples from {:s} '\
-              '(batch size: {:d}, number of batches: {:d})'.format(len(train_dataset), train_dataset_path,
+              '(batch size: {:d}, number of batches: {:d})'.format(len(train_dataset), train_dataset_dir,
                                                                    self.config['batch_size'], len(self.train_dataloader)))
-        if os.path.exists(val_dataset_path):
+        if os.path.exists(val_dataset_dir):
             self.use_val = True
-            val_dataset = Pix2pixDataset(val_dataset_path, self.transforms_src, self.transforms_tgt)
+            val_dataset = Pix2pixDataset(val_dataset_dir, *self.__load_image_transforms())
             assert all(s[0].shape == s[1].shape for s in val_dataset) and (len(set(s[0].shape for s in val_dataset)) == 1), \
                 "The shape of all source and target images must be the same."
             self.val_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=True, num_workers=0)
             print('Loaded {:d} validation samples from {:s} ' \
-                  '(batch size: {:d}, number of batches: {:d})'.format(len(val_dataset), val_dataset_path,
+                  '(batch size: {:d}, number of batches: {:d})'.format(len(val_dataset), val_dataset_dir,
                                                                        1, len(self.val_dataloader)))
 
     def __build_generator(self):
@@ -299,10 +299,10 @@ class Pix2pixGAN():
         # initialize network weights
         print('Initialize generator network with {:s}'.format(self.config['init_type']))
         self.__init_weights(self.generator, self.config['init_type'], self.config['init_gain'])
-        if self.verbose:
-            print('Pix2pix generator architecture')
-            summary(self.generator, (self.config['image_chns'], self.config['image_rows'], self.config['image_cols']), device='cpu')
         self.generator.to(self.device)
+        print('Pix2pix generator architecture')
+        summary(self.generator, (self.config['image_chns'], self.config['image_rows'], self.config['image_cols']),
+                device='cuda' if 'cuda' in str(self.device) else 'cpu')
 
     def __build_discriminator(self):
         self.discriminator = Pix2pixDiscriminator(n_input_channels=2 * self.config['image_chns'],
@@ -312,10 +312,10 @@ class Pix2pixGAN():
         # initialize network weights
         print('Initialize discriminator network with {:s}'.format(self.config['init_type']))
         self.__init_weights(self.discriminator, self.config['init_type'], self.config['init_gain'])
-        if self.verbose:
-            print('Pix2pix discriminator architecture')
-            summary(self.discriminator, [(self.config['image_chns'], self.config['image_rows'], self.config['image_cols'])] * 2, device='cpu')
         self.discriminator.to(self.device)
+        print('Pix2pix discriminator architecture')
+        summary(self.discriminator, [(self.config['image_chns'], self.config['image_rows'], self.config['image_cols'])] * 2,
+                device='cuda' if 'cuda' in str(self.device) else 'cpu')
 
     def train(self):
         train_start_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -359,10 +359,10 @@ class Pix2pixGAN():
                 self.save_models(train_start_time, epoch + 1)
 
     def __save_val(self, tag=None, epoch=None):
-        val_output_path = 'datasets/{:s}/val_output/{:s}'.format(self.dataset, tag) if tag is not None \
+        val_output_dir = 'datasets/{:s}/val_output/{:s}'.format(self.dataset, tag) if tag is not None \
             else 'datasets/{:s}/val_output'.format(self.dataset)
-        if not os.path.exists(val_output_path):
-            os.makedirs(val_output_path)
+        if not os.path.exists(val_output_dir):
+            os.makedirs(val_output_dir)
         # take a sample to validate the generator
         real_src, real_tgt, real_path = next(iter(self.val_dataloader))  # batch dimension shape is 1
         with torch.no_grad():
@@ -380,20 +380,63 @@ class Pix2pixGAN():
         # save numpy array as an image
         val_output_image = np.concatenate([real_src, fake_tgt, real_tgt], axis=1)
         val_output_image = Image.fromarray(val_output_image, 'RGB')
-        val_output_image.save(os.path.join(os.path.normpath(val_output_path), real_filename_base + real_filename_ext))
+        val_output_path = os.path.join(os.path.normpath(val_output_dir), real_filename_base + real_filename_ext)
+        val_output_image.save(val_output_path)
+        print('Validation is saved at {:s}.'.format(val_output_path))
 
     def save_models(self, tag=None, epoch=None):
-        model_path = 'datasets/{:s}/model/{:s}'.format(self.dataset, tag) if tag is not None \
+        model_dir = 'datasets/{:s}/model/{:s}'.format(self.dataset, tag) if tag is not None \
             else 'datasets/{:s}/model'.format(self.dataset)
-        if not os.path.exists(model_path):
-            os.makedirs(model_path)
+        if not os.path.exists(model_dir):
+            os.makedirs(model_dir)
         generator_model_filename = 'generator_epoch_{:d}.pth'.format(epoch) if epoch is not None \
             else 'generator.pth'
         discriminator_model_filename = 'discriminator_epoch_{:d}.pth'.format(epoch) if epoch is not None \
             else 'discriminator.pth'
-        torch.save(self.generator.cpu().state_dict(),
-                   os.path.join(os.path.normpath(model_path), generator_model_filename))
-        torch.save(self.discriminator.cpu().state_dict(),
-                   os.path.join(os.path.normpath(model_path), discriminator_model_filename))
+        generator_model_path = os.path.join(os.path.normpath(model_dir), generator_model_filename)
+        discriminator_model_path = os.path.join(os.path.normpath(model_dir), discriminator_model_filename)
+        torch.save(self.generator.cpu().state_dict(), generator_model_path)
+        torch.save(self.discriminator.cpu().state_dict(), discriminator_model_path)
         self.generator.to(self.device)
         self.discriminator.to(self.device)
+        print('Generator model is saved at {:s}.'.format(generator_model_path))
+        print('Discriminator model is saved at {:s}'.format(discriminator_model_path))
+
+    def test(self):
+        test_output_dir = 'datasets/{:s}/test_output'.format(self.dataset)
+        if not os.path.exists(test_output_dir):
+            os.makedirs(test_output_dir)
+        transforms_src, _ = self.__load_image_transforms()
+        # load test source images
+        images, images_path = [], []
+        for image_path in self.test_images_path:
+            image = cv2.imread(image_path)
+            if image is not None:
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # cv2.imread works with the BGR order
+                image = transforms_src(image).unsqueeze(0).to(self.device)
+                images.append(image)
+                images_path.append(image_path)
+                print('Loaded source image file {:s}'.format(image_path))
+            else:
+                warnings.warn('Source image file {:s} was not loaded.'.format(image_path))
+        images_src = torch.cat(images, dim=0)
+        # generate target images and save
+        with torch.no_grad():
+            images_tgt = self.generator(images_src)
+        for image_src, image_tgt, image_path in zip(images_src, images_tgt, images_path):
+            # denormalize images
+            image_src = denormalize_image(image_src)
+            image_tgt = denormalize_image(image_tgt)
+            # save numpy array as an image
+            image = np.concatenate([image_src, image_tgt], axis=1)
+            image = Image.fromarray(image, 'RGB')
+            test_output_path = os.path.join(os.path.normpath(test_output_dir), image_path.split(os.sep)[-1])
+            image.save(test_output_path)
+            print('Saved target image file {:s}'.format(test_output_path))
+
+    def load_models(self):
+        model_dir = 'datasets/{:s}/model'.format(self.dataset)
+        generator_model_filename = 'generator.pth'
+        assert os.path.isfile(os.path.join(os.path.normpath(model_dir), generator_model_filename)), "Generator model file must exist."
+        state_dict = torch.load(os.path.join(os.path.normpath(model_dir), generator_model_filename), map_location=self.device)
+        self.generator.load_state_dict(state_dict)
