@@ -9,7 +9,7 @@ if __name__ == '__main__':
     # train example: train -d facades -c config.yaml
     # test example: test -d facades -c config.yaml -i datasets/facades/test/1_src.jpg datasets/facades/test/2_src.jpg
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', type=str.lower, choices=['train', 'test'], help='an integer for the accumulator')
+    parser.add_argument('mode', type=str.lower, choices=['train', 'test'], help='work mode')
     parser.add_argument('-c', '--config', required=True, type=str, help="config file")
     parser.add_argument('-d', '--dataset', required=True, type=str, help="dataset name (train mode only)")
     parser.add_argument('-i', '--input', type=str, nargs='*', help="input source image (test mode only)")
