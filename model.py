@@ -434,9 +434,10 @@ class Pix2pixGAN():
             image.save(test_output_path)
             print('Saved target image file {:s}'.format(test_output_path))
 
-    def load_models(self):
+    def load_models(self, generator_model_filename=None):
         model_dir = 'datasets/{:s}/model'.format(self.dataset)
-        generator_model_filename = 'generator.pth'
+        if generator_model_filename is None:
+            generator_model_filename = 'generator.pth'
         assert os.path.isfile(os.path.join(os.path.normpath(model_dir), generator_model_filename)), "Generator model file must exist."
         state_dict = torch.load(os.path.join(os.path.normpath(model_dir), generator_model_filename), map_location=self.device)
         self.generator.load_state_dict(state_dict)
