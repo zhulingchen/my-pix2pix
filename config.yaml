@@ -17,4 +17,4 @@ lambda_l1: 100
 batch_size: 4
 epochs: 200
 val_freq: 1
-save_freq: 1
+save_freq: 20

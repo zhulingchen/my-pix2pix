@@ -353,30 +353,47 @@ class Pix2pixGAN():
                                                             loss_d.item(), loss_g.item()))
             # save validation results
             if ((epoch + 1) % self.config['val_freq'] == 0) and self.use_val:
-                val_output_path = 'datasets/{:s}/val_output/{:s}'.format(self.dataset, train_start_time)
-                if not os.path.exists(val_output_path):
-                    os.makedirs(val_output_path)
-                real_src, real_tgt, real_path = next(iter(self.val_dataloader))  # batch dimension shape is 1
-                with torch.no_grad():
-                    fake_tgt = self.generator(real_src.to(self.device))
-                real_src = denormalize_image(real_src[0])
-                fake_tgt = denormalize_image(fake_tgt[0])
-                real_tgt = denormalize_image(real_tgt[0])
-                real_path = real_path[0]
-                real_filename = real_path.split(os.sep)[-1]
-                real_filename_base, real_filename_ext = os.path.splitext(real_filename)
-                real_filename_base = 'epoch_{:d}_{:s}'.format(epoch + 1, real_filename_base)
-                val_output_image = np.concatenate([real_src, fake_tgt, real_tgt], axis=1)
-                val_output_image = Image.fromarray(val_output_image, 'RGB')
-                val_output_image.save(os.path.join(os.path.normpath(val_output_path), real_filename_base + real_filename_ext))
+                self.__save_val(train_start_time, epoch + 1)
             # save models
             if ((epoch + 1) % self.config['save_freq'] == 0) or (epoch == self.config['epochs'] - 1):
-                model_path = 'datasets/{:s}/model/{:s}'.format(self.dataset, train_start_time)
-                if not os.path.exists(model_path):
-                    os.makedirs(model_path)
-                generator_model_filename = 'generator_epoch_{:d}.pth'.format(epoch + 1)
-                discriminator_model_filename = 'discriminator_epoch_{:d}.pth'.format(epoch + 1)
-                torch.save(self.generator.cpu().state_dict(), os.path.join(os.path.normpath(model_path), generator_model_filename))
-                torch.save(self.discriminator.cpu().state_dict(), os.path.join(os.path.normpath(model_path), discriminator_model_filename))
-                self.generator.to(self.device)
-                self.discriminator.to(self.device)
+                self.save_models(train_start_time, epoch + 1)
+
+    def __save_val(self, tag=None, epoch=None):
+        val_output_path = 'datasets/{:s}/val_output/{:s}'.format(self.dataset, tag) if tag is not None \
+            else 'datasets/{:s}/val_output'.format(self.dataset)
+        if not os.path.exists(val_output_path):
+            os.makedirs(val_output_path)
+        # take a sample to validate the generator
+        real_src, real_tgt, real_path = next(iter(self.val_dataloader))  # batch dimension shape is 1
+        with torch.no_grad():
+            fake_tgt = self.generator(real_src.to(self.device))
+        # denormalize images
+        real_src = denormalize_image(real_src[0])
+        fake_tgt = denormalize_image(fake_tgt[0])
+        real_tgt = denormalize_image(real_tgt[0])
+        # prepare output filename
+        real_path = real_path[0]
+        real_filename = real_path.split(os.sep)[-1]
+        real_filename_base, real_filename_ext = os.path.splitext(real_filename)
+        if epoch is not None:
+            real_filename_base = 'epoch_{:d}_{:s}'.format(epoch, real_filename_base)
+        # save numpy array as an image
+        val_output_image = np.concatenate([real_src, fake_tgt, real_tgt], axis=1)
+        val_output_image = Image.fromarray(val_output_image, 'RGB')
+        val_output_image.save(os.path.join(os.path.normpath(val_output_path), real_filename_base + real_filename_ext))
+
+    def save_models(self, tag=None, epoch=None):
+        model_path = 'datasets/{:s}/model/{:s}'.format(self.dataset, tag) if tag is not None \
+            else 'datasets/{:s}/model'.format(self.dataset)
+        if not os.path.exists(model_path):
+            os.makedirs(model_path)
+        generator_model_filename = 'generator_epoch_{:d}.pth'.format(epoch) if epoch is not None \
+            else 'generator.pth'
+        discriminator_model_filename = 'discriminator_epoch_{:d}.pth'.format(epoch) if epoch is not None \
+            else 'discriminator.pth'
+        torch.save(self.generator.cpu().state_dict(),
+                   os.path.join(os.path.normpath(model_path), generator_model_filename))
+        torch.save(self.discriminator.cpu().state_dict(),
+                   os.path.join(os.path.normpath(model_path), discriminator_model_filename))
+        self.generator.to(self.device)
+        self.discriminator.to(self.device)
