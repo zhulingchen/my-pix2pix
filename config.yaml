@@ -11,7 +11,8 @@ init_type: normal
 init_gain: 0.02
 loss: wgangp  # vanilla, wgangp
 dg_train_ratio: 5  # train how many times of discriminator before train generator once
-lr: 0.0002
+lr_d: 0.0002
+lr_g: 0.0005
 beta1: 0.5
 beta2: 0.999
 lambda_l1: 100

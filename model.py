@@ -207,10 +207,10 @@ class Pix2pixGAN():
             self.gan_loss = get_gan_loss(self.config['loss'], self.device)
             self.l1_loss = nn.L1Loss()
             self.opt_g = torch.optim.Adam(self.generator.parameters(),
-                                          lr=self.config['lr'],
+                                          lr=self.config['lr_g'],
                                           betas=(self.config['beta1'], self.config['beta2']))
             self.opt_d = torch.optim.Adam(self.discriminator.parameters(),
-                                          lr=self.config['lr'],
+                                          lr=self.config['lr_d'],
                                           betas=(self.config['beta1'], self.config['beta2']))
         else:
             self.test_images_path = [os.path.normpath(i) for i in args.input]
