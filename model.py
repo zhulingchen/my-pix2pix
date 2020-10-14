@@ -56,7 +56,6 @@ class UnetSkipConnectionBlock(nn.Module):
         + -------------------identity--------------------
         |-- downsampling -- |submodule| -- upsampling --|
     """
-
     def __init__(self, n_outer_channels, n_inner_channels, n_input_channels=None,
                  submodule=None, outermost=False, innermost=False, norm_layer='batch_norm', use_dropout=False):
         """Construct a Unet submodule with skip connections.
@@ -85,8 +84,8 @@ class UnetSkipConnectionBlock(nn.Module):
         upnorm = norm_layer(n_outer_channels)
 
         if outermost:
-            upconv = nn.ConvTranspose2d(n_inner_channels * 2, n_outer_channels,
-                                        kernel_size=4, stride=2, padding=1)  # in_channels is doubled because of the previous concatenation
+            upconv = nn.ConvTranspose2d(n_inner_channels * 2, n_outer_channels,  # in_channels is doubled because of the previous concatenation
+                                        kernel_size=4, stride=2, padding=1)
             down = [downconv]
             up = [uprelu, upconv, nn.Tanh()]
             model = down + [submodule] + up
@@ -97,8 +96,8 @@ class UnetSkipConnectionBlock(nn.Module):
             up = [uprelu, upconv, upnorm]
             model = down + up
         else:
-            upconv = nn.ConvTranspose2d(n_inner_channels * 2, n_outer_channels,
-                                        kernel_size=4, stride=2, padding=1, bias=use_bias)  # in_channels is doubled because of the previous concatenation
+            upconv = nn.ConvTranspose2d(n_inner_channels * 2, n_outer_channels,  # in_channels is doubled because of the previous concatenation
+                                        kernel_size=4, stride=2, padding=1, bias=use_bias)
             down = [downrelu, downconv, downnorm]
             up = [uprelu, upconv, upnorm]
             model = down + [submodule] + up
@@ -242,8 +241,7 @@ class Pix2pixGAN():
                     raise NotImplementedError('initialization method [%s] is not implemented' % type)
                 if hasattr(m, 'bias') and m.bias is not None:
                     init.constant_(m.bias.data, 0.0)
-            elif classname.find(
-                    'BatchNorm2d') != -1:  # BatchNorm Layer's weight is not a matrix; only normal distribution applies.
+            elif classname.find('BatchNorm2d') != -1:  # BatchNorm Layer's weight is not a matrix; only normal distribution applies.
                 init.normal_(m.weight.data, 1.0, gain)
                 init.constant_(m.bias.data, 0.0)
         # apply the initialization function <init_func>
@@ -317,6 +315,21 @@ class Pix2pixGAN():
         summary(self.discriminator, [(self.config['image_chns'], self.config['image_rows'], self.config['image_cols'])] * 2,
                 device='cuda' if 'cuda' in str(self.device) else 'cpu')
 
+    def __get_gradient_penalty_loss(self, real, fake, constant=1.0):
+        batch_size = real.shape[0]
+        alpha = torch.rand(batch_size, 1, 1, 1)
+        alpha = alpha.expand_as(real).to(self.device)
+        interpolated = alpha * real + (1 - alpha) * fake
+        interpolated.requires_grad_(True)
+        dummy = torch.empty(batch_size, 0, self.config['image_rows'], self.config['image_cols']).to(self.device)  # to fit the discriminator input argument list
+        disc_interpolated = self.discriminator(interpolated, dummy)
+        grad_interpolated = torch.autograd.grad(outputs=disc_interpolated, inputs=interpolated,
+                                                grad_outputs = torch.ones_like(disc_interpolated),
+                                                create_graph = True, retain_graph = True, only_inputs = True)[0]
+        grad_interpolated = grad_interpolated.view(batch_size, -1)  # flat the data
+        grad_norm = torch.sqrt(torch.sum(grad_interpolated ** 2, dim=1) + 1e-16)
+        return torch.mean((grad_norm - constant) ** 2)
+
     def train(self):
         train_start_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         for epoch in range(self.config['epochs']):
@@ -335,22 +348,32 @@ class Pix2pixGAN():
                 loss_d_fake = self.gan_loss(pred_fake, False)  # discriminator loss on fake
                 pred_real = self.discriminator(real_src, real_tgt)  # discriminate real
                 loss_d_real = self.gan_loss(pred_real, True)  # discriminator loss on real
-                loss_d = 0.5 * (loss_d_fake + loss_d_real)
+                loss_d = loss_d_fake + loss_d_real  # total discriminator loss
+                if self.config['loss'] == 'wgangp':  # add gradient penalty for wgangp
+                    loss_gp = self.config['lambda_gp'] * self.__get_gradient_penalty_loss(real=torch.cat([real_src, real_tgt], dim=1),
+                                                                                          fake=torch.cat([real_src, fake_tgt.detach()], dim=1))
+                    loss_d += loss_gp
                 loss_d.backward()
                 self.opt_d.step()  # update discriminator weights
                 # update generator
-                for param in self.discriminator.parameters():  # disable backprop for discriminator
-                    param.requires_grad = False
-                self.opt_g.zero_grad()  # clear generator gradients
-                pred_fake = self.discriminator(real_src, fake_tgt)  # discriminate fake
-                loss_g_gan = self.gan_loss(pred_fake, True)  # gan loss on fake; let discriminator think fake_tgt is real
-                loss_g_l1 = self.config['lambda_l1'] * F.l1_loss(fake_tgt, real_tgt)  # weighted L1-loss
-                loss_g = loss_g_gan + loss_g_l1
-                loss_g.backward()
-                self.opt_g.step()  # update generator weights
-            print('Epoch {:d} / {:d}: \t Elapsed Time: {:.4f} sec \t' \
-                  'D_loss: {:.4f} \t G_loss: {:.4f}'.format(epoch+1, self.config['epochs'], time.time() - epoch_start_time,
-                                                            loss_d.item(), loss_g.item()))
+                if (batch + 1) % self.config['dg_train_ratio'] == 0:
+                    for param in self.discriminator.parameters():  # disable backprop for discriminator
+                        param.requires_grad = False
+                    self.opt_g.zero_grad()  # clear generator gradients
+                    pred_fake = self.discriminator(real_src, fake_tgt)  # discriminate fake
+                    loss_g_gan = self.gan_loss(pred_fake, True)  # gan loss on fake; let discriminator think fake_tgt is real
+                    loss_g_l1 = self.config['lambda_l1'] * F.l1_loss(fake_tgt, real_tgt)  # weighted L1-loss
+                    loss_g = loss_g_gan + loss_g_l1
+                    loss_g.backward()
+                    self.opt_g.step()  # update generator weights
+            # print end-of-epoch log message
+            log_message = 'Epoch {:d} / {:d}: \t Elapsed Time: {:.4f} sec \t'.format(epoch + 1, self.config['epochs'],
+                                                                                     time.time() - epoch_start_time)
+            log_message += 'G_loss: {:.4f}\t'.format(loss_g.item())
+            log_message += 'D_loss: {:.4f}'.format(loss_d.item())
+            if self.config['loss'] == 'wgangp':
+                log_message += ' (GP_loss: {:.4f})'.format(loss_gp.item())
+            print(log_message)
             # save validation results
             if ((epoch + 1) % self.config['val_freq'] == 0) and self.use_val:
                 self.__save_val(train_start_time, epoch + 1)

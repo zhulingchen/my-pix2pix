@@ -9,11 +9,13 @@ norm_layer: batch
 use_dropout: true
 init_type: normal
 init_gain: 0.02
-loss: vanilla  # vanilla, wgangp
+loss: wgangp  # vanilla, wgangp
+dg_train_ratio: 5  # train how many times of discriminator before train generator once
 lr: 0.0002
 beta1: 0.5
 beta2: 0.999
 lambda_l1: 100
+lambda_gp: 10  # used for wgangp loss only
 batch_size: 4
 epochs: 200
 val_freq: 1
