@@ -51,6 +51,18 @@ def denormalize_image(image):
     return image_numpy.astype(np.uint8)
 
 
+class LayerNormWrapper(nn.Module):
+    """A wrapper module of nn.LayerNorm that uses input shapes during the forward process"""
+    def __init__(self, eps=1e-5, elementwise_affine=True):
+        super(LayerNormWrapper, self).__init__()
+        self.eps = eps
+        self.elementwise_affine = elementwise_affine
+
+    def forward(self, input):
+        layernorm = nn.LayerNorm(input.shape[1:], self.eps, self.elementwise_affine).to(input.device)
+        return layernorm(input)
+
+
 class UnetSkipConnectionBlock(nn.Module):
     """Defines the Unet submodule with skip connection.
         + -------------------identity--------------------
@@ -152,7 +164,7 @@ class Pix2pixGenerator(nn.Module):
 
 class Pix2pixDiscriminator(nn.Module):
     """Define a PatchGAN discriminator"""
-    def __init__(self, n_input_channels, n_first_conv_filters=64, n_layers=3, norm_layer='batch_norm'):
+    def __init__(self, n_input_channels, loss_type='vanilla', n_first_conv_filters=64, n_layers=3, norm_layer='batch_norm'):
         """Construct a PatchGAN discriminator
 
         Parameters:
@@ -175,7 +187,7 @@ class Pix2pixDiscriminator(nn.Module):
             sequence += [
                 nn.Conv2d(n_first_conv_filters * nf_mult_prev, n_first_conv_filters * nf_mult,
                           kernel_size=4, stride=2 if n < n_layers else 1, padding=1, bias=use_bias),
-                norm_layer(n_first_conv_filters * nf_mult),
+                LayerNormWrapper() if loss_type == 'wgangp' else norm_layer(n_first_conv_filters * nf_mult),
                 nn.LeakyReLU(0.2, True)
             ]
         # output 1 channel prediction map
@@ -304,6 +316,7 @@ class Pix2pixGAN():
 
     def __build_discriminator(self):
         self.discriminator = Pix2pixDiscriminator(n_input_channels=2 * self.config['image_chns'],
+                                                  loss_type=self.config['loss'],
                                                   n_first_conv_filters=self.config['discriminator_first_conv_filters'],
                                                   n_layers=self.config['discriminator_conv_layers'],
                                                   norm_layer=self.config['norm_layer'])
