@@ -53,13 +53,12 @@ def denormalize_image(image):
 
 class LayerNormWrapper(nn.Module):
     """A wrapper module of nn.LayerNorm that uses input shapes during the forward process"""
-    def __init__(self, eps=1e-5, elementwise_affine=True):
+    def __init__(self, eps=1e-5):
         super(LayerNormWrapper, self).__init__()
         self.eps = eps
-        self.elementwise_affine = elementwise_affine
 
     def forward(self, input):
-        layernorm = nn.LayerNorm(input.shape[1:], self.eps, self.elementwise_affine).to(input.device)
+        layernorm = nn.LayerNorm(input.shape[1:], eps=self.eps, elementwise_affine=False).to(input.device)
         return layernorm(input)
 
 
