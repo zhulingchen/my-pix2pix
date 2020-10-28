@@ -58,8 +58,7 @@ class LayerNormWrapper(nn.Module):
         self.eps = eps
 
     def forward(self, input):
-        layernorm = nn.LayerNorm(input.shape[1:], eps=self.eps, elementwise_affine=False).to(input.device)
-        return layernorm(input)
+        return F.layer_norm(input, input.shape[1:], eps=self.eps)
 
 
 class UnetSkipConnectionBlock(nn.Module):
